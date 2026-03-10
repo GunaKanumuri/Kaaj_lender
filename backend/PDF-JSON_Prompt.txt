@@ -1,0 +1,121 @@
+I'm going to paste a lender's equipment finance policy PDF. 
+Extract all lending rules and return a Python dict following 
+this exact schema:
+
+{
+  "name": "Lender Name",
+  "description": "one line summary",
+  "contact_name": "...",
+  "contact_email": "...",
+  "contact_phone": "...",
+  "programs": [
+    {
+      "name": "Program Name",
+      "description": "...",
+      "priority": 1,
+      "min_rate": 7.00,   # omit if not in PDF
+      "max_rate": 9.00,   # omit if not in PDF
+      "rules": [
+        {
+          "field": "fico_score",
+          "operator": "gte",         # gte/lte/eq/not_in/in/between
+          "value_numeric": 700,      # for numeric comparisons
+          "value_boolean": False,    # for True/False fields only
+          "value_list": "CA,NV",     # for in/not_in operators
+          "value_numeric_max": 500000, # only for between operator
+          "rule_type": "hard",       # hard = disqualifier, soft = score penalty
+          "label": "Human readable label shown to broker",
+          "score_weight": 20
+        }
+      ]
+    }
+  ]
+}
+
+Available fields:
+fico_score, paynet_score, time_in_business_years, annual_revenue,
+business_state, industry, is_startup, is_homeowner, is_us_citizen,
+years_at_residence, has_bankruptcy, years_since_bankruptcy,
+has_judgement, has_foreclosure, has_repossession, has_tax_lien,
+has_collections_last_3y, revolving_debt, revolving_plus_unsecured_debt,
+comparable_credit_pct, loan_amount, loan_term_months, equipment_type,
+equipment_age_years, equipment_mileage, is_private_party, is_titled_asset
+
+Rules:
+- If a rule disqualifies an applicant → rule_type: hard
+- If a rule is "preferred" or "ideal" → rule_type: soft  
+- If the PDF has multiple tiers → create one program per tier, 
+  priority 1 = best tier
+- If the lender has separate tracks (e.g. Corp Only, Medical) → 
+  separate programs
+- Do not invent rules. If the PDF doesn't say it, don't add it.
+
+Here is the PDF content:
+[paste PDF text]
+
+
+    # ============================================================
+    # 6. FIRST WESTERN EQUIPMENT FINANCE
+    # New lender — demonstrates the add-a-lender workflow
+    # A Rate: FICO 710+, PayNet 670+, 4yr TIB
+    # B Rate: FICO 680+, no PayNet required, 3yr TIB
+    # C Rate: FICO 640+, 2yr TIB
+    # ============================================================
+    {
+        "name": "First Western Equipment Finance",
+        "description": (
+            "Equipment Finance — A/B/C credit tiers. "
+            "No CA/NY. Min loan $10K, max $750K. No cannabis or gambling."
+        ),
+        "contact_name": "First Western Credit Team",
+        "contact_email": "credit@firstwesternequipment.com",
+        "contact_phone": "(800) 555-0199",
+        "programs": [
+            {
+                "name": "A Rate",
+                "description": "FICO 710+, PayNet 670+, 4yr TIB",
+                "priority": 1,
+                "min_rate": 7.00,
+                "max_rate": 8.00,
+                "rules": [
+                    {"field": "fico_score",            "operator": "gte",     "value_numeric": 710,   "rule_type": "hard", "label": "Min FICO Score",               "score_weight": 20},
+                    {"field": "paynet_score",           "operator": "gte",     "value_numeric": 670,   "rule_type": "hard", "label": "Min PayNet Score",             "score_weight": 20},
+                    {"field": "time_in_business_years", "operator": "gte",     "value_numeric": 4,     "rule_type": "hard", "label": "Min Time in Business (years)", "score_weight": 15},
+                    {"field": "loan_amount",            "operator": "between", "value_numeric": 10000, "value_numeric_max": 750000, "rule_type": "hard", "label": "Loan Amount $10K–$750K",   "score_weight": 10},
+                    {"field": "has_bankruptcy",         "operator": "eq",      "value_boolean": False, "rule_type": "hard", "label": "No Bankruptcy",               "score_weight": 25},
+                    {"field": "business_state",         "operator": "not_in",  "value_list": "CA,NY",  "rule_type": "hard", "label": "State Not Excluded (no CA/NY)","score_weight": 15},
+                    {"field": "equipment_type",         "operator": "not_in",  "value_list": "Cannabis,Gambling", "rule_type": "hard", "label": "Equipment Not Excluded", "score_weight": 20},
+                ],
+            },
+            {
+                "name": "B Rate",
+                "description": "FICO 680+, no PayNet required, 3yr TIB",
+                "priority": 2,
+                "min_rate": 8.50,
+                "max_rate": 10.00,
+                "rules": [
+                    {"field": "fico_score",            "operator": "gte",     "value_numeric": 680,   "rule_type": "hard", "label": "Min FICO Score",               "score_weight": 20},
+                    {"field": "time_in_business_years", "operator": "gte",     "value_numeric": 3,     "rule_type": "hard", "label": "Min Time in Business (years)", "score_weight": 15},
+                    {"field": "loan_amount",            "operator": "between", "value_numeric": 10000, "value_numeric_max": 500000, "rule_type": "hard", "label": "Loan Amount $10K–$500K",   "score_weight": 10},
+                    {"field": "has_bankruptcy",         "operator": "eq",      "value_boolean": False, "rule_type": "hard", "label": "No Bankruptcy",               "score_weight": 25},
+                    {"field": "business_state",         "operator": "not_in",  "value_list": "CA,NY",  "rule_type": "hard", "label": "State Not Excluded (no CA/NY)","score_weight": 15},
+                    {"field": "equipment_type",         "operator": "not_in",  "value_list": "Cannabis,Gambling", "rule_type": "hard", "label": "Equipment Not Excluded", "score_weight": 20},
+                ],
+            },
+            {
+                "name": "C Rate",
+                "description": "FICO 640+, 2yr TIB — no PayNet required",
+                "priority": 3,
+                "min_rate": 11.00,
+                "max_rate": 14.00,
+                "rules": [
+                    {"field": "fico_score",            "operator": "gte",     "value_numeric": 640,   "rule_type": "hard", "label": "Min FICO Score",               "score_weight": 20},
+                    {"field": "time_in_business_years", "operator": "gte",     "value_numeric": 2,     "rule_type": "hard", "label": "Min Time in Business (years)", "score_weight": 15},
+                    {"field": "loan_amount",            "operator": "between", "value_numeric": 10000, "value_numeric_max": 150000, "rule_type": "hard", "label": "Loan Amount $10K–$150K",   "score_weight": 10},
+                    {"field": "has_bankruptcy",         "operator": "eq",      "value_boolean": False, "rule_type": "hard", "label": "No Bankruptcy",               "score_weight": 25},
+                    {"field": "business_state",         "operator": "not_in",  "value_list": "CA,NY",  "rule_type": "hard", "label": "State Not Excluded (no CA/NY)","score_weight": 15},
+                    {"field": "equipment_type",         "operator": "not_in",  "value_list": "Cannabis,Gambling", "rule_type": "hard", "label": "Equipment Not Excluded", "score_weight": 20},
+                ],
+            },
+        ],
+    },
