@@ -505,7 +505,7 @@ function StepBusiness({ register, errors, watch }: any) {
         <Input
           label="Time in Business (years)" type="number" step="0.5" min="0"
           placeholder="e.g. 3.5"
-          hint={isStartup ? '⚠ Startup flag active — routes to startup programs' : 'Years since founding'}
+          hint={isStartup ? '⚠ Startup flag active, routes to startup programs' : 'Years since founding'}
           {...register('business.years_in_business', { valueAsNumber: true })}
         />
         <Input label="PayNet Score" type="number" min="0" max="999" placeholder="e.g. 680"
@@ -518,7 +518,7 @@ function StepBusiness({ register, errors, watch }: any) {
         id="is_startup" name="business.is_startup" register={register}
         accentHex="#059669"
         label="This is a startup"
-        sublabel="Operating less than 2 years — enables Advantage+ Startup program"
+        sublabel="Operating less than 2 years, enables Advantage+ Startup program"
       />
     </div>
   );
@@ -545,7 +545,7 @@ function StepGuarantor({ register, errors }: any) {
       </FieldGrid>
 
       <SectionDivider label="Credit Scores"
-        hint="Used directly in lender program eligibility rules — FICO is required." />
+        hint="Used directly in lender program eligibility rules, FICO is required." />
       <FieldGrid cols={2}>
         <Input
           label="FICO Score *" type="number" min="300" max="850"
@@ -565,7 +565,7 @@ function StepGuarantor({ register, errors }: any) {
       </FieldGrid>
 
       <SectionDivider label="Debt Exposure"
-        hint="Stearns Bank enforces a $30K revolving debt cap — be precise." />
+        hint="Stearns Bank enforces a $30K revolving debt cap, be precise." />
       <FieldGrid cols={2}>
         <Input label="Revolving Debt ($)" type="number" min="0"
           placeholder="e.g. 5,000" hint="Credit cards + revolving lines"
@@ -604,7 +604,7 @@ function StepGuarantor({ register, errors }: any) {
 // ─────────────────────────────────────────────────────────────
 
 const DEROG_FLAGS = [
-  { id: 'has_bankruptcy',          label: 'Bankruptcy',              sublabel: 'Prior filing — Falcon requires 15-yr lookback' },
+  { id: 'has_bankruptcy',          label: 'Bankruptcy',              sublabel: 'Prior filing, Falcon requires 15-yr lookback' },
   { id: 'has_judgement',           label: 'Judgement',               sublabel: 'Court-ordered monetary judgement on record' },
   { id: 'has_foreclosure',         label: 'Foreclosure',             sublabel: 'Prior property foreclosure on record' },
   { id: 'has_repossession',        label: 'Repossession',            sublabel: 'Prior asset repossession on record' },
@@ -666,7 +666,7 @@ function StepDerogatory({ register, watch }: any) {
       <div className="flex items-start gap-3 p-4 rounded-xl border border-emerald-200 bg-emerald-50">
         <Check className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
         <p className="text-xs text-emerald-800 leading-relaxed">
-          If none apply, leave all boxes unchecked — the guarantor will be treated
+          If none apply, leave all boxes unchecked, the guarantor will be treated
           as having a <strong>clean derogatory record</strong> across all lender evaluations.
         </p>
       </div>
@@ -696,7 +696,7 @@ function StepLoan({ register, errors }: any) {
       </div>
 
       <SectionDivider label="Equipment Details"
-        hint="Type and age drive program eligibility — Class 8 trucks need Falcon's trucking program." />
+        hint="Type and age drive program eligibility, Class 8 trucks need Falcon's trucking program." />
       <FieldGrid cols={2}>
         <Select label="Equipment Type" placeholder="Select type" options={EQUIPMENT_TYPES}
           {...register('loan_request.equipment_type')} />
@@ -708,7 +708,7 @@ function StepLoan({ register, errors }: any) {
         />
         <Input label="Equipment Mileage" type="number" min="0"
           placeholder="e.g. 45,000"
-          hint="Optional — trucks and titled assets only"
+          hint="Optional, trucks and titled assets only"
           {...register('loan_request.equipment_mileage', { valueAsNumber: true })} />
       </FieldGrid>
 

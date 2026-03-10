@@ -1,5 +1,14 @@
 // ============================================================
-// APPLICATIONS LIST PAGE
+// ApplicationsListPage
+//
+// TABLE OF CONTENTS
+//   1.  Imports
+//   2.  statusBadge        — maps status string → Badge variant
+//   3.  ApplicationsListPage component
+//       3a. State & navigation
+//       3b. Data fetching
+//       3c. Handlers        — delete, run underwriting
+//       3d. Render          — header, empty state, app list
 // ============================================================
 
 import { useEffect, useState } from 'react';
@@ -12,23 +21,45 @@ import { Badge } from '../components/ui/Badge';
 import { Card } from '../components/ui/Card';
 import type { Application } from '../types';
 
+
+// region ── 2. statusBadge ────────────────────────────────────
+//
+// Pure helper — maps application status string to the correct
+// Badge variant. Kept outside the component to avoid re-creation
+// on every render.
+// ─────────────────────────────────────────────────────────────
+
 const statusBadge = (status: string) => {
-  if (status === 'completed') return <Badge variant="success">Completed</Badge>;
-  if (status === 'draft') return <Badge variant="neutral">Draft</Badge>;
+  if (status === 'completed')  return <Badge variant="success">Completed</Badge>;
+  if (status === 'draft')      return <Badge variant="neutral">Draft</Badge>;
   if (status === 'processing') return <Badge variant="info">Processing...</Badge>;
   return <Badge variant="info">{status}</Badge>;
 };
 
-export default function ApplicationsListPage() {
-  const [apps, setApps] = useState<Application[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [runningId, setRunningId] = useState<number | null>(null);
-  const [errorId, setErrorId] = useState<number | null>(null);
-  const navigate = useNavigate();
+// endregion
 
+
+// region ── 3. ApplicationsListPage component ─────────────────
+
+export default function ApplicationsListPage() {
+
+  // region ── 3a. State & navigation ──────────────────────────
+  const [apps, setApps]         = useState<Application[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [runningId, setRunningId] = useState<number | null>(null);
+  const [errorId, setErrorId]   = useState<number | null>(null);
+  const navigate = useNavigate();
+  // endregion
+
+
+  // region ── 3b. Data fetching ────────────────────────────────
   useEffect(() => {
     applicationsApi.list().then(setApps).finally(() => setLoading(false));
   }, []);
+  // endregion
+
+
+  // region ── 3c. Handlers ─────────────────────────────────────
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -55,8 +86,14 @@ export default function ApplicationsListPage() {
     }
   };
 
+  // endregion
+
+
+  // region ── 3d. Render ───────────────────────────────────────
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
+
+      {/* ── Header ── */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">Loan Applications</h1>
@@ -67,8 +104,10 @@ export default function ApplicationsListPage() {
         </Button>
       </div>
 
+      {/* ── Loading state ── */}
       {loading && <div className="text-center py-16 text-zinc-500">Loading...</div>}
 
+      {/* ── Empty state ── */}
       {!loading && apps.length === 0 && (
         <Card className="text-center py-16">
           <FileText className="w-12 h-12 text-zinc-300 mx-auto mb-3" />
@@ -80,6 +119,7 @@ export default function ApplicationsListPage() {
         </Card>
       )}
 
+      {/* ── Application list ── */}
       {!loading && apps.length > 0 && (
         <div className="space-y-3">
           {apps.map(app => (
@@ -103,7 +143,7 @@ export default function ApplicationsListPage() {
                 </div>
                 <div className="flex items-center gap-4 mt-1 text-sm text-zinc-500">
                   {app.business?.industry && <span>{app.business.industry}</span>}
-                  {app.business?.state && <span>{app.business.state}</span>}
+                  {app.business?.state    && <span>{app.business.state}</span>}
                   {app.loan_request?.amount && (
                     <span>${app.loan_request.amount.toLocaleString()}</span>
                   )}
@@ -130,7 +170,7 @@ export default function ApplicationsListPage() {
                     >
                       {runningId === app.id
                         ? <Loader2 className="w-4 h-4 animate-spin" />
-                        : <Play className="w-4 h-4" />}
+                        : <Play   className="w-4 h-4" />}
                       Re-run
                     </Button>
                     {/* View Results button */}
@@ -164,10 +204,16 @@ export default function ApplicationsListPage() {
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
+
             </div>
           ))}
         </div>
       )}
+
     </div>
   );
+  // endregion
+
 }
+
+// endregion

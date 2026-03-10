@@ -6,6 +6,25 @@
 #
 # We replicate the minimal types needed from models/enums
 # and import ONLY pure-logic functions from services.
+#
+# TABLE OF CONTENTS
+#   1.  Mock Setup           — sys.modules injection before any app.* import
+#   2.  Helpers              — make_rule_snap, make_fake_rule, make_program_snap,
+#                              make_lender_snap, make_full_application
+#   3.  Rule Evaluator: GTE  — boundary, pass, fail
+#   4.  Rule Evaluator: LTE  — boundary, pass, fail
+#   5.  Rule Evaluator: GT / LT
+#   6.  Rule Evaluator: EQ / NEQ
+#   7.  Rule Evaluator: IN / NOT_IN
+#   8.  Rule Evaluator: BETWEEN
+#   9.  Rule Evaluator: Missing / Optional values
+#  10.  Rule Evaluator: Unknown operator
+#  11.  Rule Evaluator: Explanations
+#  12.  Program Evaluation   — _eval_program() hard/soft/scoring
+#  13.  Margin Bonus         — fit score bonus for exceeding thresholds
+#  14.  Lender Evaluation    — evaluate_lender_pure() multi-program logic
+#  15.  Context Building     — build_application_context()
+#  16.  Realistic Scenarios  — end-to-end borrower profiles
 # ============================================================
 
 import pytest
@@ -13,9 +32,12 @@ import sys
 from unittest.mock import MagicMock
 from dataclasses import dataclass
 
-# ─────────────────────────────────────────────────────────────
-# MOCK the entire import chain so no DB connection is attempted.
-# This must happen BEFORE any app.* imports.
+
+# region ── 1. Mock Setup ──────────────────────────────────────
+#
+# Inject fake modules BEFORE any app.* import fires.
+# Prevents create_engine / pydantic-settings from running
+# and requiring a live database connection.
 # ─────────────────────────────────────────────────────────────
 
 # Fake database module — prevents create_engine from running
@@ -55,10 +77,14 @@ from app.services.matching_engine import (
     LenderResult,
 )
 
+# endregion
 
-# ============================
-# HELPERS
-# ============================
+
+# region ── 2. Helpers ─────────────────────────────────────────
+#
+# Factory functions shared across all test classes.
+# Kept minimal — only the fields each test actually needs.
+# ─────────────────────────────────────────────────────────────
 
 def make_rule_snap(field, operator, **kw) -> RuleSnapshot:
     """Create a RuleSnapshot for testing."""
@@ -140,10 +166,10 @@ def make_full_application():
     app.loan_request.is_titled_asset = False
     return app
 
+# endregion
 
-# ============================
-# 1. RULE EVALUATOR — GTE
-# ============================
+
+# region ── 3. Rule Evaluator: GTE ────────────────────────────
 
 class TestRuleEvaluatorGTE:
 
@@ -166,10 +192,10 @@ class TestRuleEvaluatorGTE:
         r = make_fake_rule("time_in_business_years", "gte", value_numeric=2.0)
         assert evaluate_rule(r, {"time_in_business_years": 2.5}).passed is True
 
+# endregion
 
-# ============================
-# 2. RULE EVALUATOR — LTE
-# ============================
+
+# region ── 4. Rule Evaluator: LTE ────────────────────────────
 
 class TestRuleEvaluatorLTE:
 
@@ -185,10 +211,10 @@ class TestRuleEvaluatorLTE:
         r = make_fake_rule("loan_amount", "lte", value_numeric=100000)
         assert evaluate_rule(r, {"loan_amount": 150000}).passed is False
 
+# endregion
 
-# ============================
-# 3. RULE EVALUATOR — GT / LT
-# ============================
+
+# region ── 5. Rule Evaluator: GT / LT ────────────────────────
 
 class TestRuleEvaluatorGT:
 
@@ -211,10 +237,10 @@ class TestRuleEvaluatorLT:
         r = make_fake_rule("equipment_age_years", "lt", value_numeric=15)
         assert evaluate_rule(r, {"equipment_age_years": 15}).passed is False
 
+# endregion
 
-# ============================
-# 4. RULE EVALUATOR — EQ / NEQ
-# ============================
+
+# region ── 6. Rule Evaluator: EQ / NEQ ───────────────────────
 
 class TestRuleEvaluatorEQ:
 
@@ -249,10 +275,10 @@ class TestRuleEvaluatorNEQ:
         r = make_fake_rule("has_foreclosure", "neq", value_boolean=True)
         assert evaluate_rule(r, {"has_foreclosure": True}).passed is False
 
+# endregion
 
-# ============================
-# 5. RULE EVALUATOR — IN / NOT_IN
-# ============================
+
+# region ── 7. Rule Evaluator: IN / NOT_IN ────────────────────
 
 class TestRuleEvaluatorIN:
 
@@ -287,10 +313,10 @@ class TestRuleEvaluatorNOTIN:
         r = make_fake_rule("business_state", "not_in", value_list="CA,NV")
         assert evaluate_rule(r, {"business_state": "ca"}).passed is False
 
+# endregion
 
-# ============================
-# 6. RULE EVALUATOR — BETWEEN
-# ============================
+
+# region ── 8. Rule Evaluator: BETWEEN ────────────────────────
 
 class TestRuleEvaluatorBETWEEN:
 
@@ -314,10 +340,10 @@ class TestRuleEvaluatorBETWEEN:
         r = make_fake_rule("loan_amount", "between", value_numeric=10000, value_numeric_max=75000)
         assert evaluate_rule(r, {"loan_amount": 100000}).passed is False
 
+# endregion
 
-# ============================
-# 7. RULE EVALUATOR — Missing / Optional values
-# ============================
+
+# region ── 9. Rule Evaluator: Missing / Optional Values ──────
 
 class TestRuleEvaluatorMissing:
 
@@ -349,10 +375,10 @@ class TestRuleEvaluatorMissing:
         r = make_fake_rule("equipment_mileage", "lte", value_numeric=100000)
         assert evaluate_rule(r, {}).passed is True
 
+# endregion
 
-# ============================
-# 8. RULE EVALUATOR — Unknown operator
-# ============================
+
+# region ── 10. Rule Evaluator: Unknown Operator ───────────────
 
 class TestRuleEvaluatorUnknown:
 
@@ -362,10 +388,10 @@ class TestRuleEvaluatorUnknown:
         assert res.passed is False
         assert "Unknown" in res.explanation
 
+# endregion
 
-# ============================
-# 9. RULE EVALUATOR — Explanations
-# ============================
+
+# region ── 11. Rule Evaluator: Explanations ──────────────────
 
 class TestRuleExplanations:
 
@@ -387,10 +413,14 @@ class TestRuleExplanations:
         assert res.actual_value == "650"
         assert ">= 700" in res.required_value
 
+# endregion
 
-# ============================
-# 10. PROGRAM EVALUATION via _eval_program
-# ============================
+
+# region ── 12. Program Evaluation ────────────────────────────
+#
+# Tests for _eval_program() — hard/soft rule handling,
+# fit score calculation, rule_evals population.
+# ─────────────────────────────────────────────────────────────
 
 class TestProgramEvaluation:
 
@@ -464,10 +494,14 @@ class TestProgramEvaluation:
         res = _eval_program(prog, {"fico_score": 750, "time_in_business_years": 3})
         assert res.rules_passed == 1  # only fico passes
 
+# endregion
 
-# ============================
-# 11. MARGIN BONUS
-# ============================
+
+# region ── 13. Margin Bonus ───────────────────────────────────
+#
+# Fit score can gain up to +5 pts when numeric gte rules are
+# beaten by more than 15% margin.
+# ─────────────────────────────────────────────────────────────
 
 class TestMarginBonus:
 
@@ -478,7 +512,7 @@ class TestMarginBonus:
             {"field": "comparable_credit_pct", "operator": "gte", "value_numeric": 80,
              "rule_type": "soft", "score_weight": 10},
         ])
-        res_bonus = _eval_program(prog, {"fico_score": 750, "comparable_credit_pct": 50})
+        res_bonus    = _eval_program(prog, {"fico_score": 750, "comparable_credit_pct": 50})
         res_no_bonus = _eval_program(prog, {"fico_score": 660, "comparable_credit_pct": 50})
         assert res_bonus.fit_score > res_no_bonus.fit_score
 
@@ -491,12 +525,12 @@ class TestMarginBonus:
 
     def test_bonus_capped(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 300, "id": 1},
-            {"field": "time_in_business_years", "operator": "gte", "value_numeric": 1, "id": 2},
-            {"field": "annual_revenue", "operator": "gte", "value_numeric": 10000, "id": 3},
-            {"field": "loan_amount", "operator": "gte", "value_numeric": 1000, "id": 4},
-            {"field": "paynet_score", "operator": "gte", "value_numeric": 300, "id": 5},
-            {"field": "revolving_debt", "operator": "gte", "value_numeric": 100, "id": 6},
+            {"field": "fico_score",              "operator": "gte", "value_numeric": 300,    "id": 1},
+            {"field": "time_in_business_years",  "operator": "gte", "value_numeric": 1,      "id": 2},
+            {"field": "annual_revenue",          "operator": "gte", "value_numeric": 10000,  "id": 3},
+            {"field": "loan_amount",             "operator": "gte", "value_numeric": 1000,   "id": 4},
+            {"field": "paynet_score",            "operator": "gte", "value_numeric": 300,    "id": 5},
+            {"field": "revolving_debt",          "operator": "gte", "value_numeric": 100,    "id": 6},
         ])
         ctx = {
             "fico_score": 800, "time_in_business_years": 20,
@@ -506,10 +540,14 @@ class TestMarginBonus:
         res = _eval_program(prog, ctx)
         assert res.fit_score <= 105.0  # max 100 + 5
 
+# endregion
 
-# ============================
-# 12. LENDER EVALUATION via evaluate_lender_pure
-# ============================
+
+# region ── 14. Lender Evaluation ─────────────────────────────
+#
+# Tests for evaluate_lender_pure() — multi-program selection,
+# closest attempt logic (FIX-1), summary truncation.
+# ─────────────────────────────────────────────────────────────
 
 class TestLenderEvaluation:
 
@@ -552,8 +590,8 @@ class TestLenderEvaluation:
             {"field": "fico_score", "operator": "gte", "value_numeric": 800},
         ], name="Tier A", priority=1, prog_id=1)
         p2 = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 800, "id": 10},
-            {"field": "time_in_business_years", "operator": "gte", "value_numeric": 10, "id": 11},
+            {"field": "fico_score",             "operator": "gte", "value_numeric": 800, "id": 10},
+            {"field": "time_in_business_years", "operator": "gte", "value_numeric": 10,  "id": 11},
         ], name="Tier B", priority=2, prog_id=2)
         lender = make_lender_snap([p1, p2])
         res = evaluate_lender_pure(lender, {"fico_score": 700, "time_in_business_years": 2})
@@ -571,8 +609,8 @@ class TestLenderEvaluation:
 
     def test_result_contains_rule_evals(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 700},
-            {"field": "has_bankruptcy", "operator": "eq", "value_boolean": False},
+            {"field": "fico_score",    "operator": "gte", "value_numeric": 700},
+            {"field": "has_bankruptcy","operator": "eq",  "value_boolean": False},
         ], prog_id=1)
         lender = make_lender_snap([prog])
         res = evaluate_lender_pure(lender, {"fico_score": 750, "has_bankruptcy": False})
@@ -593,22 +631,25 @@ class TestLenderEvaluation:
 
     def test_summary_max_3_failure_labels(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 800, "label": "FICO", "id": 1},
-            {"field": "time_in_business_years", "operator": "gte", "value_numeric": 20, "label": "TIB", "id": 2},
-            {"field": "annual_revenue", "operator": "gte", "value_numeric": 10000000, "label": "Revenue", "id": 3},
-            {"field": "paynet_score", "operator": "gte", "value_numeric": 900, "label": "PayNet", "id": 4},
+            {"field": "fico_score",             "operator": "gte", "value_numeric": 800,      "label": "FICO",    "id": 1},
+            {"field": "time_in_business_years", "operator": "gte", "value_numeric": 20,       "label": "TIB",     "id": 2},
+            {"field": "annual_revenue",         "operator": "gte", "value_numeric": 10000000, "label": "Revenue", "id": 3},
+            {"field": "paynet_score",           "operator": "gte", "value_numeric": 900,      "label": "PayNet",  "id": 4},
         ], prog_id=1)
         lender = make_lender_snap([prog])
         ctx = {"fico_score": 600, "time_in_business_years": 1, "annual_revenue": 100000, "paynet_score": 500}
         res = evaluate_lender_pure(lender, ctx)
-        # summary truncates to 3 failure explanations
         parts = res.summary.replace("Ineligible: ", "").split(", ")
         assert len(parts) <= 3
 
+# endregion
 
-# ============================
-# 13. CONTEXT BUILDING
-# ============================
+
+# region ── 15. Context Building ──────────────────────────────
+#
+# Tests for build_application_context() — field mapping,
+# None sub-objects, partial data.
+# ─────────────────────────────────────────────────────────────
 
 class TestContextBuilding:
 
@@ -650,10 +691,15 @@ class TestContextBuilding:
         ctx = build_application_context(app)
         assert len(ctx) == 27
 
+# endregion
 
-# ============================
-# 14. REALISTIC SCENARIOS
-# ============================
+
+# region ── 16. Realistic Scenarios ───────────────────────────
+#
+# End-to-end borrower profiles testing common real-world cases:
+# strong prime, weak/challenged, geographic restriction,
+# industry exclusion, startup routing, multi-lender comparison.
+# ─────────────────────────────────────────────────────────────
 
 class TestRealisticScenarios:
 
@@ -687,11 +733,11 @@ class TestRealisticScenarios:
 
     def test_strong_applicant_eligible(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 700},
-            {"field": "time_in_business_years", "operator": "gte", "value_numeric": 2},
-            {"field": "loan_amount", "operator": "between", "value_numeric": 5000, "value_numeric_max": 250000},
-            {"field": "has_bankruptcy", "operator": "eq", "value_boolean": False},
-            {"field": "business_state", "operator": "not_in", "value_list": "ND,VT"},
+            {"field": "fico_score",             "operator": "gte",     "value_numeric": 700},
+            {"field": "time_in_business_years", "operator": "gte",     "value_numeric": 2},
+            {"field": "loan_amount",            "operator": "between", "value_numeric": 5000, "value_numeric_max": 250000},
+            {"field": "has_bankruptcy",         "operator": "eq",      "value_boolean": False},
+            {"field": "business_state",         "operator": "not_in",  "value_list": "ND,VT"},
         ], prog_id=1)
         lender = make_lender_snap([prog])
         res = evaluate_lender_pure(lender, self._strong_ctx())
@@ -700,9 +746,9 @@ class TestRealisticScenarios:
 
     def test_weak_applicant_rejected(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 700},
-            {"field": "has_bankruptcy", "operator": "eq", "value_boolean": False},
-            {"field": "has_tax_lien", "operator": "eq", "value_boolean": False},
+            {"field": "fico_score",    "operator": "gte", "value_numeric": 700},
+            {"field": "has_bankruptcy","operator": "eq",  "value_boolean": False},
+            {"field": "has_tax_lien",  "operator": "eq",  "value_boolean": False},
         ], prog_id=1)
         lender = make_lender_snap([prog])
         res = evaluate_lender_pure(lender, self._weak_ctx())
@@ -710,8 +756,8 @@ class TestRealisticScenarios:
 
     def test_weak_falls_to_lower_tier(self):
         p_strict = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 700},
-            {"field": "has_bankruptcy", "operator": "eq", "value_boolean": False},
+            {"field": "fico_score",    "operator": "gte", "value_numeric": 700},
+            {"field": "has_bankruptcy","operator": "eq",  "value_boolean": False},
         ], name="Tier A", priority=1, prog_id=1)
         p_lenient = make_program_snap([
             {"field": "fico_score", "operator": "gte", "value_numeric": 550},
@@ -723,7 +769,7 @@ class TestRealisticScenarios:
 
     def test_geographic_restriction(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 650},
+            {"field": "fico_score",     "operator": "gte",    "value_numeric": 650},
             {"field": "business_state", "operator": "not_in", "value_list": "TX,CA,NY"},
         ], prog_id=1)
         lender = make_lender_snap([prog])
@@ -772,11 +818,9 @@ class TestRealisticScenarios:
 
     def test_mixed_hard_soft_scoring(self):
         prog = make_program_snap([
-            {"field": "fico_score", "operator": "gte", "value_numeric": 650, "rule_type": "hard"},
-            {"field": "is_homeowner", "operator": "eq", "value_boolean": True,
-             "rule_type": "soft", "score_weight": 15},
-            {"field": "comparable_credit_pct", "operator": "gte", "value_numeric": 75,
-             "rule_type": "soft", "score_weight": 10},
+            {"field": "fico_score",          "operator": "gte", "value_numeric": 650,  "rule_type": "hard"},
+            {"field": "is_homeowner",        "operator": "eq",  "value_boolean": True, "rule_type": "soft", "score_weight": 15},
+            {"field": "comparable_credit_pct","operator": "gte", "value_numeric": 75,  "rule_type": "soft", "score_weight": 10},
         ], prog_id=1)
         lender = make_lender_snap([prog])
         res = evaluate_lender_pure(lender, {"fico_score": 700, "is_homeowner": False, "comparable_credit_pct": 50})
@@ -797,8 +841,10 @@ class TestRealisticScenarios:
             )
         ], name="Lender B", lender_id=2)
 
-        ctx = self._strong_ctx()
+        ctx  = self._strong_ctx()
         res_a = evaluate_lender_pure(lender_a, ctx)
         res_b = evaluate_lender_pure(lender_b, ctx)
         assert res_a.status == MatchStatus.ELIGIBLE
         assert res_b.status == MatchStatus.ELIGIBLE
+
+# endregion

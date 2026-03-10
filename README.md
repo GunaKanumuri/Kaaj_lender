@@ -88,6 +88,9 @@ Frontend runs at `http://localhost:5173`.
 ```bash
 cd backend
 pytest app/tests/ -v
+
+cd frontend 
+npx vitest run 
 ```
 
 ---
@@ -130,7 +133,7 @@ The full set of available fields is in `app/models/lender.py` under `RuleField`.
 
 Open `backend/app/seed/lenders_data.py` and add an entry to the `LENDERS_SEED` list. Follow the existing structure — each lender has a name, optional description and contact info, and a list of programs. Each program has a name, priority (lower number = tried first), optional rate range, and a list of rules.
 
-```python
+```python If you want to convert the PDF - Json format using AI(GPT/Claude) you can find the prompt designed in file name ( PDF_JSON_Prompt.txt)
 {
     "name": "Your New Lender",
     "description": "Short description from the PDF",

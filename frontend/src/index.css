@@ -1,10 +1,28 @@
 /* ============================================================
    index.css — global styles + PageTOC layout classes
+   
+   TABLE OF CONTENTS
+     1.  Tailwind directives
+     2.  Base layer       — box-sizing, body font, smoothing
+     3.  Components layer
+         3a. PageLayout shell   — .page-shell, .page-content, .page-toc-rail
+         3b. PageTOC component  — .toc-root, .toc-heading, .toc-list,
+                                  .toc-item variants, .toc-pip variants
+     4.  TOC rail media query   — sticky sidebar at ≥1200px
+                                  (outside @layer — PostCSS @media nesting)
    ============================================================ */
+
+
+/* region ── 1. Tailwind Directives ──────────────────────────── */
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* endregion */
+
+
+/* region ── 2. Base Layer ───────────────────────────────────── */
 
 @layer base {
   * { box-sizing: border-box; }
@@ -15,9 +33,14 @@
   }
 }
 
+/* endregion */
+
+
+/* region ── 3. Components Layer ─────────────────────────────── */
+
 @layer components {
 
-  /* ── PageLayout shell ──────────────────────────────────── */
+  /* region ── 3a. PageLayout Shell ──────────────────────────── */
 
   .page-shell {
     @apply flex justify-center gap-8 w-full;
@@ -33,27 +56,41 @@
     @apply hidden;
   }
 
-  /* ── PageTOC component ─────────────────────────────────── */
+  /* endregion */
 
-  .toc-root        { @apply text-sm; }
-  .toc-heading     { @apply text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3; }
-  .toc-list        { @apply space-y-0.5 list-none m-0 p-0; }
 
-  .toc-item        {
+  /* region ── 3b. PageTOC Component ─────────────────────────── */
+
+  .toc-root    { @apply text-sm; }
+  .toc-heading { @apply text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3; }
+  .toc-list    { @apply space-y-0.5 list-none m-0 p-0; }
+
+  .toc-item {
     @apply flex items-center gap-2 w-full text-left px-2 py-1 rounded-lg
            text-sm transition-colors cursor-pointer;
   }
-  .toc-item--indent  { @apply pl-5; }
-  .toc-item--active  { @apply text-emerald-700 font-medium bg-emerald-50; }
-  .toc-item--idle    { @apply text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100; }
+  .toc-item--indent { @apply pl-5; }
+  .toc-item--active { @apply text-emerald-700 font-medium bg-emerald-50; }
+  .toc-item--idle   { @apply text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100; }
 
-  .toc-pip       { @apply flex-shrink-0 w-1 h-1 rounded-full; }
-  .toc-pip--on   { @apply bg-emerald-600; }
-  .toc-pip--off  { @apply bg-transparent; }
+  .toc-pip     { @apply flex-shrink-0 w-1 h-1 rounded-full; }
+  .toc-pip--on { @apply bg-emerald-600; }
+  .toc-pip--off { @apply bg-transparent; }
+
+  /* endregion */
+
 }
 
-/* ── TOC rail — wide screens only ─────────────────────────── */
-/* Must live outside @layer so the @media nesting is valid PostCSS */
+/* endregion */
+
+
+/* region ── 4. TOC Rail Media Query ─────────────────────────── *
+ *
+ * Must live outside @layer so the @media nesting is valid PostCSS.
+ * Activates the sticky TOC sidebar at viewports ≥ 1200px.
+ *
+ * ─────────────────────────────────────────────────────────────── */
+
 @media (min-width: 1200px) {
   .page-toc-rail {
     display: block;
@@ -64,3 +101,5 @@
     width: 200px;
   }
 }
+
+/* endregion */

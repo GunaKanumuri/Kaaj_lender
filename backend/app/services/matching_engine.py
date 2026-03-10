@@ -19,6 +19,15 @@
 #         hard failures, most rules passed as tiebreak.
 # FIX-2: Re-run cascade — delete rule_evaluation_results before
 #         match_results to avoid FK violation.
+#
+# TABLE OF CONTENTS
+#   1.  Serialisable Snapshots   — RuleSnapshot, ProgramSnapshot,
+#                                  LenderSnapshot, _snapshot_lenders()
+#   2.  Application Context      — build_application_context()
+#   3.  Rule & Program Eval      — RuleEvalSnapshot, ProgramResult,
+#                                  _eval_program()
+#   4.  Lender Evaluation        — LenderResult, evaluate_lender_pure()
+#   5.  Main Entry Point         — run_underwriting()
 # ============================================================
 
 import asyncio
@@ -34,8 +43,11 @@ from app.models.results import MatchResult, MatchStatus, RuleEvaluationResult
 from app.services.rule_evaluator import evaluate_rule, EvaluationResult
 
 
-# ─────────────────────────────────────────────────────────────
-# Serialisable snapshots  (passed into thread workers — no ORM)
+# region ── 1. Serialisable Snapshots ─────────────────────────
+#
+# Plain dataclasses passed into ThreadPoolExecutor workers.
+# No ORM objects cross the thread boundary — SQLAlchemy sessions
+# are not thread-safe.
 # ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -95,9 +107,13 @@ def _snapshot_lenders(lenders: list[Lender]) -> list[LenderSnapshot]:
         snaps.append(LenderSnapshot(id=l.id, name=l.name, programs=progs))
     return snaps
 
+# endregion
 
-# ─────────────────────────────────────────────────────────────
-# Build application context dict
+
+# region ── 2. Application Context ────────────────────────────
+#
+# Flattens the nested Application ORM object into a plain dict
+# keyed by rule field names. Workers read from this dict only.
 # ─────────────────────────────────────────────────────────────
 
 def build_application_context(application: Application) -> dict:
@@ -115,35 +131,46 @@ def build_application_context(application: Application) -> dict:
         ctx["paynet_score"]           = b.paynet_score
 
     if g:
-        ctx["fico_score"]                   = g.fico_score
-        ctx["is_homeowner"]                 = g.is_homeowner
-        ctx["is_us_citizen"]                = g.is_us_citizen
-        ctx["years_at_residence"]           = g.years_at_residence
-        ctx["has_bankruptcy"]               = g.has_bankruptcy
-        ctx["years_since_bankruptcy"]       = g.years_since_bankruptcy
-        ctx["has_judgement"]                = g.has_judgement
-        ctx["has_foreclosure"]              = g.has_foreclosure
-        ctx["has_repossession"]             = g.has_repossession
-        ctx["has_tax_lien"]                 = g.has_tax_lien
-        ctx["has_collections_last_3y"]      = g.has_collections_last_3y
-        ctx["revolving_debt"]               = g.revolving_debt
-        ctx["revolving_plus_unsecured_debt"]= g.revolving_plus_unsecured_debt
-        ctx["comparable_credit_pct"]        = g.comparable_credit_pct
+        ctx["fico_score"]                    = g.fico_score
+        ctx["is_homeowner"]                  = g.is_homeowner
+        ctx["is_us_citizen"]                 = g.is_us_citizen
+        ctx["years_at_residence"]            = g.years_at_residence
+        ctx["has_bankruptcy"]                = g.has_bankruptcy
+        ctx["years_since_bankruptcy"]        = g.years_since_bankruptcy
+        ctx["has_judgement"]                 = g.has_judgement
+        ctx["has_foreclosure"]               = g.has_foreclosure
+        ctx["has_repossession"]              = g.has_repossession
+        ctx["has_tax_lien"]                  = g.has_tax_lien
+        ctx["has_collections_last_3y"]       = g.has_collections_last_3y
+        ctx["revolving_debt"]                = g.revolving_debt
+        ctx["revolving_plus_unsecured_debt"] = g.revolving_plus_unsecured_debt
+        ctx["comparable_credit_pct"]         = g.comparable_credit_pct
 
     if lr:
-        ctx["loan_amount"]        = lr.amount
-        ctx["loan_term_months"]   = lr.term_months
-        ctx["equipment_type"]     = lr.equipment_type
-        ctx["equipment_age_years"]= lr.equipment_age_years
-        ctx["equipment_mileage"]  = lr.equipment_mileage
-        ctx["is_private_party"]   = lr.is_private_party
-        ctx["is_titled_asset"]    = lr.is_titled_asset
+        ctx["loan_amount"]         = lr.amount
+        ctx["loan_term_months"]    = lr.term_months
+        ctx["equipment_type"]      = lr.equipment_type
+        ctx["equipment_age_years"] = lr.equipment_age_years
+        ctx["equipment_mileage"]   = lr.equipment_mileage
+        ctx["is_private_party"]    = lr.is_private_party
+        ctx["is_titled_asset"]     = lr.is_titled_asset
 
     return ctx
 
+# endregion
 
-# ─────────────────────────────────────────────────────────────
-# Rule / program evaluation  (pure Python — no DB access)
+
+# region ── 3. Rule & Program Evaluation ──────────────────────
+#
+# Pure Python — no DB access. Safe to run inside ThreadPoolExecutor.
+#
+# _eval_program()  evaluates every rule in a program and returns
+# a ProgramResult with fit score and per-rule snapshots.
+#
+# Fit score formula:
+#   - Any hard failure  → 0
+#   - All hard pass     → 100 − (soft_deductions / total_soft_weight × 40)
+#   - Margin bonus      → up to +5 pts for numeric rules beaten by >15%
 # ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -157,13 +184,13 @@ class RuleEvalSnapshot:
 
 @dataclass
 class ProgramResult:
-    program_id:     int
-    program_name:   str
-    eligible:       bool
-    fit_score:      float
-    rule_evals:     list[RuleEvalSnapshot] = field(default_factory=list)
-    hard_fail_count:int = 0
-    rules_passed:   int = 0
+    program_id:      int
+    program_name:    str
+    eligible:        bool
+    fit_score:       float
+    rule_evals:      list[RuleEvalSnapshot] = field(default_factory=list)
+    hard_fail_count: int = 0
+    rules_passed:    int = 0
 
 
 def _eval_program(prog: ProgramSnapshot, ctx: dict) -> ProgramResult:
@@ -185,7 +212,7 @@ def _eval_program(prog: ProgramSnapshot, ctx: dict) -> ProgramResult:
             self.score_weight      = snap.score_weight
             self.label             = snap.label
 
-    rule_evals: list[RuleEvalSnapshot]       = []
+    rule_evals: list[RuleEvalSnapshot]                        = []
     hard_failures: list[tuple[RuleSnapshot, EvaluationResult]] = []
     soft_deductions = 0.0
 
@@ -205,18 +232,22 @@ def _eval_program(prog: ProgramSnapshot, ctx: dict) -> ProgramResult:
             else:
                 soft_deductions += snap.score_weight
 
-    eligible = len(hard_failures) == 0
+    eligible     = len(hard_failures) == 0
     rules_passed = sum(1 for e in rule_evals if e.passed)
 
     if not eligible:
         fit_score = 0.0
     else:
-        total_soft = sum(s.score_weight for s in prog.rules if s.rule_type not in ("hard", RuleType.HARD))
+        total_soft = sum(
+            s.score_weight for s in prog.rules
+            if s.rule_type not in ("hard", RuleType.HARD)
+        )
         if total_soft > 0:
             fit_score = max(0.0, 100.0 - (soft_deductions / total_soft) * 40.0)
         else:
             fit_score = 100.0
-        # Margin bonus
+
+        # Margin bonus — up to +5 pts for numeric rules beaten by >15%
         bonus = 0.0
         for snap in prog.rules:
             if snap.operator == "gte" and snap.value_numeric:
@@ -240,9 +271,17 @@ def _eval_program(prog: ProgramSnapshot, ctx: dict) -> ProgramResult:
         rules_passed    = rules_passed,
     )
 
+# endregion
 
-# ─────────────────────────────────────────────────────────────
-# Lender evaluation  (pure — safe for ThreadPoolExecutor)
+
+# region ── 4. Lender Evaluation ──────────────────────────────
+#
+# evaluate_lender_pure() tries every program in priority order,
+# returns the best eligible match or the closest ineligible attempt.
+#
+# FIX-1: closest attempt = fewest hard failures, most rules
+#         passed as tiebreak — gives the broker the most useful
+#         rejection reason.
 # ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -307,9 +346,19 @@ def evaluate_lender_pure(lender: LenderSnapshot, ctx: dict) -> LenderResult:
         summary      = f"Ineligible: {', '.join(failure_labels)}" if failure_labels else "Ineligible",
     )
 
+# endregion
 
-# ─────────────────────────────────────────────────────────────
-# Main entry point
+
+# region ── 5. Main Entry Point ───────────────────────────────
+#
+# run_underwriting() orchestrates the full pipeline:
+#   1. Load application + lenders from DB (main thread)
+#   2. Snapshot to plain dataclasses (no ORM across threads)
+#   3. Fan-out via ThreadPoolExecutor + asyncio.gather
+#   4. Persist all results on main thread after gather
+#
+# FIX-2: Clear rule_evaluation_results before match_results
+#         to respect the FK constraint on re-runs.
 # ─────────────────────────────────────────────────────────────
 
 async def run_underwriting(application_id: int, db: Session) -> list[MatchResult]:
@@ -407,3 +456,5 @@ async def run_underwriting(application_id: int, db: Session) -> list[MatchResult
         db.refresh(m)
 
     return saved
+
+# endregion
