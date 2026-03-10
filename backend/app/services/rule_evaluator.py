@@ -1,71 +1,105 @@
 # ============================================================
-# RULE EVALUATOR
-# Given one PolicyRule + one ApplicationContext, returns pass/fail + explanation.
+# services/rule_evaluator.py — Single Rule Evaluator
 #
-# This is pure logic — no DB calls, easily unit-tested.
-# Adding a new operator = add one elif block here, nothing else changes.
+# TABLE OF CONTENTS
+#   1. EvaluationResult dataclass
+#   2. OPTIONAL_FIELDS constant
+#   3. evaluate_rule()   — main entry point
+#   4. _build_required_description()  — helper
 #
-# FIX: Added OPTIONAL_FIELDS set. paynet_score, comparable_credit_pct, and
-#      equipment_mileage are genuinely optional — a missing value means
-#      "not provided" (skip), not a hard fail. This lets borrowers without
-#      PayNet fall through to programs that don't require it.
+# DESIGN — Pure Logic, No DB:
+#   This module has zero DB calls and zero side effects.
+#   Input:  one PolicyRule + one application context dict
+#   Output: EvaluationResult (passed, actual, required, explanation)
+#
+#   This makes it trivially unit-testable and safe to run
+#   concurrently across many lenders without any shared state.
+#
+#   Extending the engine:
+#     Adding a new operator = one new elif block in evaluate_rule().
+#     No other file needs to change.
 # ============================================================
 
 from dataclasses import dataclass
+
 from app.models.lender import PolicyRule, RuleOperator
 
 
+# region ── 1. EvaluationResult ───────────────────────────────
+
 @dataclass
 class EvaluationResult:
-    passed: bool
-    actual_value: str
-    required_value: str
-    explanation: str
+    """Structured output from a single rule check."""
+    passed:         bool
+    actual_value:   str   # What the borrower had (stringified)
+    required_value: str   # What the rule requires (human-readable)
+    explanation:    str   # Full sentence for the UI breakdown
 
+# endregion
+
+
+# region ── 2. OPTIONAL_FIELDS ────────────────────────────────
 
 # Fields where None means "not applicable — skip this rule"
-# rather than "missing required data — hard fail".
-# Rule programs that genuinely require these fields will still enforce them
-# because the borrower will have provided the value.
+# rather than "missing required data — fail the borrower".
+#
+# Rationale:
+#   paynet_score:         Many small businesses have no PayNet score.
+#                         Programs that need it will have it; others skip.
+#   comparable_credit_pct:Not all lenders require it.
+#   equipment_mileage:    Only relevant for vehicle/trucking programs.
+#
+# A program that genuinely requires one of these fields will still
+# enforce it because the borrower will have provided the value.
 OPTIONAL_FIELDS = {"paynet_score", "comparable_credit_pct", "equipment_mileage"}
 
+# endregion
+
+
+# region ── 3. evaluate_rule() ────────────────────────────────
 
 def evaluate_rule(rule: PolicyRule, context: dict) -> EvaluationResult:
     """
     Evaluate a single PolicyRule against an application context dict.
-    Returns structured result with pass/fail and human-readable explanation.
-    """
-    field = rule.field
-    operator = rule.operator
-    label = rule.label or field.replace("_", " ").title()
 
-    actual = context.get(field)
+    Args:
+        rule:    The PolicyRule ORM object (or mock with same attributes).
+        context: Flat dict of application fields, built by
+                 matching_engine.build_application_context().
+
+    Returns:
+        EvaluationResult with pass/fail and human-readable explanation.
+    """
+    field    = rule.field
+    operator = rule.operator
+    label    = rule.label or field.replace("_", " ").title()
+
+    actual       = context.get(field)
     required_desc = _build_required_description(rule)
 
-    # Handle missing value
+    # ── Handle missing value ──────────────────────────────────
     if actual is None:
         if rule.value_boolean is not None:
-            # Boolean fields default to False when missing
+            # Boolean fields are False when not provided (e.g. has_bankruptcy)
             actual = False
         elif field in OPTIONAL_FIELDS:
-            # Optional numeric field — skip rule, do not penalise borrower
             return EvaluationResult(
                 passed=True,
                 actual_value="Not provided",
                 required_value=required_desc,
-                explanation=f"{label}: Not provided — skipped (optional field)"
+                explanation=f"{label}: Not provided — skipped (optional field)",
             )
         else:
             return EvaluationResult(
                 passed=False,
                 actual_value="Not provided",
                 required_value=required_desc,
-                explanation=f"{label}: Value not provided"
+                explanation=f"{label}: Value not provided",
             )
 
     actual_str = str(actual)
 
-    # ---- Evaluate by operator ----
+    # ── Evaluate by operator ──────────────────────────────────
 
     if operator == RuleOperator.GTE:
         passed = float(actual) >= rule.value_numeric
@@ -103,7 +137,7 @@ def evaluate_rule(rule: PolicyRule, context: dict) -> EvaluationResult:
         target = rule.value_boolean if rule.value_boolean is not None else rule.value_text
         passed = str(actual).lower() == str(target).lower()
         explanation = (
-            f"{label}: ✓ Value matches required {target}"
+            f"{label}: ✓ Value matches required '{target}'"
             if passed else
             f"{label}: ✗ Value is '{actual}', required '{target}'"
         )
@@ -119,7 +153,7 @@ def evaluate_rule(rule: PolicyRule, context: dict) -> EvaluationResult:
 
     elif operator == RuleOperator.IN:
         allowed = [v.strip().upper() for v in (rule.value_list or "").split(",")]
-        passed = str(actual).upper() in allowed
+        passed  = str(actual).upper() in allowed
         explanation = (
             f"{label}: ✓ '{actual}' is an eligible value"
             if passed else
@@ -128,7 +162,7 @@ def evaluate_rule(rule: PolicyRule, context: dict) -> EvaluationResult:
 
     elif operator == RuleOperator.NOT_IN:
         excluded = [v.strip().upper() for v in (rule.value_list or "").split(",")]
-        passed = str(actual).upper() not in excluded
+        passed   = str(actual).upper() not in excluded
         explanation = (
             f"{label}: ✓ '{actual}' is not in excluded list"
             if passed else
@@ -136,7 +170,7 @@ def evaluate_rule(rule: PolicyRule, context: dict) -> EvaluationResult:
         )
 
     elif operator == RuleOperator.BETWEEN:
-        val = float(actual)
+        val    = float(actual)
         passed = rule.value_numeric <= val <= rule.value_numeric_max
         explanation = (
             f"{label}: ✓ {actual} is within range {rule.value_numeric}–{rule.value_numeric_max}"
@@ -145,35 +179,34 @@ def evaluate_rule(rule: PolicyRule, context: dict) -> EvaluationResult:
         )
 
     else:
-        passed = False
+        passed      = False
         explanation = f"{label}: Unknown operator '{operator}'"
 
     return EvaluationResult(
         passed=passed,
         actual_value=actual_str,
         required_value=required_desc,
-        explanation=explanation
+        explanation=explanation,
     )
 
+# endregion
+
+
+# region ── 4. _build_required_description() ──────────────────
 
 def _build_required_description(rule: PolicyRule) -> str:
-    """Build a human-readable description of what the rule requires."""
+    """Build a short human-readable string of what the rule requires."""
     op = rule.operator
-    if op == RuleOperator.GTE:
-        return f">= {rule.value_numeric}"
-    elif op == RuleOperator.LTE:
-        return f"<= {rule.value_numeric}"
-    elif op == RuleOperator.GT:
-        return f"> {rule.value_numeric}"
-    elif op == RuleOperator.LT:
-        return f"< {rule.value_numeric}"
-    elif op == RuleOperator.BETWEEN:
-        return f"{rule.value_numeric} – {rule.value_numeric_max}"
-    elif op in (RuleOperator.EQ, RuleOperator.NEQ):
+    if op == RuleOperator.GTE:     return f">= {rule.value_numeric}"
+    if op == RuleOperator.LTE:     return f"<= {rule.value_numeric}"
+    if op == RuleOperator.GT:      return f"> {rule.value_numeric}"
+    if op == RuleOperator.LT:      return f"< {rule.value_numeric}"
+    if op == RuleOperator.BETWEEN: return f"{rule.value_numeric} – {rule.value_numeric_max}"
+    if op in (RuleOperator.EQ, RuleOperator.NEQ):
         val = rule.value_boolean if rule.value_boolean is not None else rule.value_text
         return f"{'=' if op == RuleOperator.EQ else '!='} {val}"
-    elif op == RuleOperator.IN:
-        return f"One of: {rule.value_list}"
-    elif op == RuleOperator.NOT_IN:
-        return f"Not in: {rule.value_list}"
+    if op == RuleOperator.IN:      return f"One of: {rule.value_list}"
+    if op == RuleOperator.NOT_IN:  return f"Not in: {rule.value_list}"
     return "See policy"
+
+# endregion

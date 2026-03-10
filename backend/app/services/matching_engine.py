@@ -1,26 +1,30 @@
 # ============================================================
-# MATCHING ENGINE
-# Core orchestrator: takes an Application, evaluates all active
-# lenders concurrently, returns ranked MatchResults.
+# app/services/matching_engine.py
 #
-# Flow per lender:
-#   1. Build context dict from application fields
-#   2. Try each program in priority order
-#   3. For best matching program: evaluate all rules
-#   4. Calculate fit score (0-100)
-#   5. Persist MatchResult + RuleEvaluationResults to DB
+# Matching Engine — evaluates all active lenders concurrently,
+# persists results, returns ranked MatchResults.
 #
-# FIX-1: "Closest attempt" logic now ranks by fewest hard failures
-#        (not most rules passed). A program with 1 hard failure is
-#        closer than one with 5 hard failures even if it has fewer
-#        total rules. Tiebreak: most rules passed.
-# FIX-2: Re-run cascade delete — must delete child rule_evaluation_results
-#        before deleting match_results to avoid FK violation.
+# FIX-THREAD-SAFETY:
+#   The original implementation passed a single SQLAlchemy Session
+#   into ThreadPoolExecutor workers. SQLAlchemy sessions are NOT
+#   thread-safe — concurrent access caused silent data loss and
+#   FK violations, producing 0 match_results rows for some runs.
+#
+#   Fix: each worker receives only serialisable Python data
+#   (application context dict + plain lender/program/rule dicts).
+#   The main thread holds the one DB session and does all writes
+#   after workers return.
+#
+# FIX-1: "Closest attempt" — rank ineligible programs by fewest
+#         hard failures, most rules passed as tiebreak.
+# FIX-2: Re-run cascade — delete rule_evaluation_results before
+#         match_results to avoid FK violation.
 # ============================================================
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -30,187 +34,293 @@ from app.models.results import MatchResult, MatchStatus, RuleEvaluationResult
 from app.services.rule_evaluator import evaluate_rule, EvaluationResult
 
 
-# ------------------------------------
-# Build flat context dict from Application object
-# Rule fields map directly to keys in this dict
-# ------------------------------------
+# ─────────────────────────────────────────────────────────────
+# Serialisable snapshots  (passed into thread workers — no ORM)
+# ─────────────────────────────────────────────────────────────
+
+@dataclass
+class RuleSnapshot:
+    id:                int
+    field:             str
+    operator:          str
+    value_text:        str | None
+    value_numeric:     float | None
+    value_numeric_max: float | None   # used by BETWEEN operator
+    value_list:        str | None
+    value_boolean:     bool | None    # used by EQ/NEQ on boolean fields
+    rule_type:         str            # 'hard' | 'soft'
+    score_weight:      float
+    label:             str | None
+
+
+@dataclass
+class ProgramSnapshot:
+    id:       int
+    name:     str
+    priority: int
+    rules:    list[RuleSnapshot]
+
+
+@dataclass
+class LenderSnapshot:
+    id:       int
+    name:     str
+    programs: list[ProgramSnapshot]
+
+
+def _snapshot_lenders(lenders: list[Lender]) -> list[LenderSnapshot]:
+    """Convert ORM objects → plain dataclasses before handing to threads."""
+    snaps = []
+    for l in lenders:
+        progs = []
+        for p in l.programs:
+            if not p.is_active:
+                continue
+            rules = [
+                RuleSnapshot(
+                    id=r.id, field=r.field, operator=r.operator,
+                    value_text=r.value_text,
+                    value_numeric=r.value_numeric,
+                    value_numeric_max=r.value_numeric_max,
+                    value_list=r.value_list,
+                    value_boolean=r.value_boolean,
+                    rule_type=r.rule_type.value if hasattr(r.rule_type, 'value') else r.rule_type,
+                    score_weight=r.score_weight or 1.0,
+                    label=r.label,
+                )
+                for r in p.rules
+            ]
+            progs.append(ProgramSnapshot(id=p.id, name=p.name, priority=p.priority, rules=rules))
+        progs.sort(key=lambda p: p.priority)
+        snaps.append(LenderSnapshot(id=l.id, name=l.name, programs=progs))
+    return snaps
+
+
+# ─────────────────────────────────────────────────────────────
+# Build application context dict
+# ─────────────────────────────────────────────────────────────
 
 def build_application_context(application: Application) -> dict:
-    ctx = {}
-    b = application.business
-    g = application.guarantor
+    ctx: dict = {}
+    b  = application.business
+    g  = application.guarantor
     lr = application.loan_request
 
     if b:
         ctx["time_in_business_years"] = b.years_in_business
-        ctx["annual_revenue"] = b.annual_revenue
-        ctx["business_state"] = b.state
-        ctx["industry"] = b.industry
-        ctx["is_startup"] = b.is_startup
-        ctx["paynet_score"] = b.paynet_score
+        ctx["annual_revenue"]         = b.annual_revenue
+        ctx["business_state"]         = b.state
+        ctx["industry"]               = b.industry
+        ctx["is_startup"]             = b.is_startup
+        ctx["paynet_score"]           = b.paynet_score
 
     if g:
-        ctx["fico_score"] = g.fico_score
-        ctx["is_homeowner"] = g.is_homeowner
-        ctx["is_us_citizen"] = g.is_us_citizen
-        ctx["years_at_residence"] = g.years_at_residence
-        ctx["has_bankruptcy"] = g.has_bankruptcy
-        ctx["years_since_bankruptcy"] = g.years_since_bankruptcy
-        ctx["has_judgement"] = g.has_judgement
-        ctx["has_foreclosure"] = g.has_foreclosure
-        ctx["has_repossession"] = g.has_repossession
-        ctx["has_tax_lien"] = g.has_tax_lien
-        ctx["has_collections_last_3y"] = g.has_collections_last_3y
-        ctx["revolving_debt"] = g.revolving_debt
-        ctx["revolving_plus_unsecured_debt"] = g.revolving_plus_unsecured_debt
-        ctx["comparable_credit_pct"] = g.comparable_credit_pct
+        ctx["fico_score"]                   = g.fico_score
+        ctx["is_homeowner"]                 = g.is_homeowner
+        ctx["is_us_citizen"]                = g.is_us_citizen
+        ctx["years_at_residence"]           = g.years_at_residence
+        ctx["has_bankruptcy"]               = g.has_bankruptcy
+        ctx["years_since_bankruptcy"]       = g.years_since_bankruptcy
+        ctx["has_judgement"]                = g.has_judgement
+        ctx["has_foreclosure"]              = g.has_foreclosure
+        ctx["has_repossession"]             = g.has_repossession
+        ctx["has_tax_lien"]                 = g.has_tax_lien
+        ctx["has_collections_last_3y"]      = g.has_collections_last_3y
+        ctx["revolving_debt"]               = g.revolving_debt
+        ctx["revolving_plus_unsecured_debt"]= g.revolving_plus_unsecured_debt
+        ctx["comparable_credit_pct"]        = g.comparable_credit_pct
 
     if lr:
-        ctx["loan_amount"] = lr.amount
-        ctx["loan_term_months"] = lr.term_months
-        ctx["equipment_type"] = lr.equipment_type
-        ctx["equipment_age_years"] = lr.equipment_age_years
-        ctx["equipment_mileage"] = lr.equipment_mileage
-        ctx["is_private_party"] = lr.is_private_party
-        ctx["is_titled_asset"] = lr.is_titled_asset
+        ctx["loan_amount"]        = lr.amount
+        ctx["loan_term_months"]   = lr.term_months
+        ctx["equipment_type"]     = lr.equipment_type
+        ctx["equipment_age_years"]= lr.equipment_age_years
+        ctx["equipment_mileage"]  = lr.equipment_mileage
+        ctx["is_private_party"]   = lr.is_private_party
+        ctx["is_titled_asset"]    = lr.is_titled_asset
 
     return ctx
 
 
-# ------------------------------------
-# Evaluate a single program against context
-# ------------------------------------
+# ─────────────────────────────────────────────────────────────
+# Rule / program evaluation  (pure Python — no DB access)
+# ─────────────────────────────────────────────────────────────
 
 @dataclass
-class ProgramEvaluation:
-    program: LenderProgram
-    eligible: bool
-    fit_score: float
-    rule_results: list[tuple[PolicyRule, EvaluationResult]] = field(default_factory=list)
-    hard_failures: list[tuple[PolicyRule, EvaluationResult]] = field(default_factory=list)
+class RuleEvalSnapshot:
+    rule_id:        int
+    passed:         bool
+    actual_value:   str | None
+    required_value: str | None
+    explanation:    str | None
 
 
-def evaluate_program(program: LenderProgram, context: dict) -> ProgramEvaluation:
-    rule_results = []
-    hard_failures = []
+@dataclass
+class ProgramResult:
+    program_id:     int
+    program_name:   str
+    eligible:       bool
+    fit_score:      float
+    rule_evals:     list[RuleEvalSnapshot] = field(default_factory=list)
+    hard_fail_count:int = 0
+    rules_passed:   int = 0
+
+
+def _eval_program(prog: ProgramSnapshot, ctx: dict) -> ProgramResult:
+    """Evaluate a program's rules against the context dict.
+    All logic is pure Python — safe to run in any thread."""
+
+    # Build a minimal mock rule object that rule_evaluator can use
+    class _FakeRule:
+        def __init__(self, snap: RuleSnapshot):
+            self.id                = snap.id
+            self.field             = snap.field
+            self.operator          = snap.operator
+            self.value_text        = snap.value_text
+            self.value_numeric     = snap.value_numeric
+            self.value_numeric_max = snap.value_numeric_max
+            self.value_list        = snap.value_list
+            self.value_boolean     = snap.value_boolean
+            self.rule_type         = snap.rule_type
+            self.score_weight      = snap.score_weight
+            self.label             = snap.label
+
+    rule_evals: list[RuleEvalSnapshot]       = []
+    hard_failures: list[tuple[RuleSnapshot, EvaluationResult]] = []
     soft_deductions = 0.0
 
-    for rule in program.rules:
-        result = evaluate_rule(rule, context)
-        rule_results.append((rule, result))
+    for snap in prog.rules:
+        fake = _FakeRule(snap)
+        result: EvaluationResult = evaluate_rule(fake, ctx)
+        rule_evals.append(RuleEvalSnapshot(
+            rule_id        = snap.id,
+            passed         = result.passed,
+            actual_value   = result.actual_value,
+            required_value = result.required_value,
+            explanation    = result.explanation,
+        ))
         if not result.passed:
-            if rule.rule_type == RuleType.HARD:
-                hard_failures.append((rule, result))
+            if snap.rule_type in ("hard", RuleType.HARD):
+                hard_failures.append((snap, result))
             else:
-                soft_deductions += rule.score_weight
+                soft_deductions += snap.score_weight
 
     eligible = len(hard_failures) == 0
+    rules_passed = sum(1 for e in rule_evals if e.passed)
 
     if not eligible:
         fit_score = 0.0
     else:
-        total_soft_weight = sum(r.score_weight for r in program.rules if r.rule_type == RuleType.SOFT)
-        if total_soft_weight > 0:
-            fit_score = max(0.0, 100.0 - (soft_deductions / total_soft_weight) * 40.0)
+        total_soft = sum(s.score_weight for s in prog.rules if s.rule_type not in ("hard", RuleType.HARD))
+        if total_soft > 0:
+            fit_score = max(0.0, 100.0 - (soft_deductions / total_soft) * 40.0)
         else:
             fit_score = 100.0
-        fit_score = _apply_margin_bonus(context, program, fit_score)
+        # Margin bonus
+        bonus = 0.0
+        for snap in prog.rules:
+            if snap.operator == "gte" and snap.value_numeric:
+                actual = ctx.get(snap.field)
+                if actual is not None:
+                    try:
+                        margin = (float(actual) - snap.value_numeric) / snap.value_numeric
+                        if margin > 0.15:
+                            bonus += 1.0
+                    except (TypeError, ZeroDivisionError):
+                        pass
+        fit_score = min(100.0, fit_score + min(5.0, bonus))
 
-    return ProgramEvaluation(
-        program=program,
-        eligible=eligible,
-        fit_score=round(fit_score, 1),
-        rule_results=rule_results,
-        hard_failures=hard_failures,
+    return ProgramResult(
+        program_id      = prog.id,
+        program_name    = prog.name,
+        eligible        = eligible,
+        fit_score       = round(fit_score, 1),
+        rule_evals      = rule_evals,
+        hard_fail_count = len(hard_failures),
+        rules_passed    = rules_passed,
     )
 
 
-def _apply_margin_bonus(context: dict, program: LenderProgram, base_score: float) -> float:
-    """Small bonus for applicants significantly exceeding minimums (max +5 pts)."""
-    bonus = 0.0
-    for rule in program.rules:
-        if rule.operator == "gte" and rule.value_numeric:
-            actual = context.get(rule.field)
-            if actual is not None:
-                try:
-                    margin = (float(actual) - rule.value_numeric) / rule.value_numeric
-                    if margin > 0.15:
-                        bonus += 1.0
-                except (TypeError, ZeroDivisionError):
-                    pass
-    return min(100.0, base_score + min(5.0, bonus))
+# ─────────────────────────────────────────────────────────────
+# Lender evaluation  (pure — safe for ThreadPoolExecutor)
+# ─────────────────────────────────────────────────────────────
+
+@dataclass
+class LenderResult:
+    lender_id:    int
+    lender_name:  str
+    status:       str          # 'eligible' | 'ineligible'
+    fit_score:    float
+    program_id:   int | None
+    program_name: str | None
+    rule_evals:   list[RuleEvalSnapshot]
+    summary:      str
 
 
-# ------------------------------------
-# Evaluate one lender — tries all programs, returns best match
-# ------------------------------------
+def evaluate_lender_pure(lender: LenderSnapshot, ctx: dict) -> LenderResult:
+    """Evaluate one lender — no DB access, no ORM objects."""
+    if not lender.programs:
+        return LenderResult(
+            lender_id=lender.id, lender_name=lender.name,
+            status=MatchStatus.INELIGIBLE, fit_score=0.0,
+            program_id=None, program_name=None, rule_evals=[],
+            summary="No active programs available",
+        )
 
-def evaluate_lender(lender: Lender, context: dict) -> dict:
-    active_programs = sorted(
-        [p for p in lender.programs if p.is_active],
-        key=lambda p: p.priority,
-    )
+    all_results: list[ProgramResult] = []
+    best_eligible: ProgramResult | None = None
 
-    if not active_programs:
-        return {
-            "lender": lender,
-            "status": MatchStatus.INELIGIBLE,
-            "fit_score": 0.0,
-            "best_program": None,
-            "rule_results": [],
-            "summary": "No active programs available",
-        }
-
-    best_eligible: ProgramEvaluation | None = None
-    all_evals: list[ProgramEvaluation] = []
-
-    for program in active_programs:
-        ev = evaluate_program(program, context)
-        all_evals.append(ev)
-        if ev.eligible:
-            if best_eligible is None or ev.fit_score > best_eligible.fit_score:
-                best_eligible = ev
+    for prog in lender.programs:
+        pr = _eval_program(prog, ctx)
+        all_results.append(pr)
+        if pr.eligible and (best_eligible is None or pr.fit_score > best_eligible.fit_score):
+            best_eligible = pr
 
     if best_eligible:
-        return {
-            "lender": lender,
-            "status": MatchStatus.ELIGIBLE,
-            "fit_score": best_eligible.fit_score,
-            "best_program": best_eligible.program,
-            "rule_results": best_eligible.rule_results,
-            "summary": f"Eligible under {best_eligible.program.name} program",
-        }
+        return LenderResult(
+            lender_id    = lender.id,
+            lender_name  = lender.name,
+            status       = MatchStatus.ELIGIBLE,
+            fit_score    = best_eligible.fit_score,
+            program_id   = best_eligible.program_id,
+            program_name = best_eligible.program_name,
+            rule_evals   = best_eligible.rule_evals,
+            summary      = f"Eligible under {best_eligible.program_name} program",
+        )
 
-    # Ineligible — show the closest attempt.
-    # FIX-1: rank by fewest hard failures first, most rules passed as tiebreak.
-    best_attempt = min(
-        all_evals,
-        key=lambda e: (len(e.hard_failures), -sum(1 for _, r in e.rule_results if r.passed))
+    # FIX-1: closest attempt = fewest hard failures, most rules passed as tiebreak
+    closest = min(all_results, key=lambda r: (r.hard_fail_count, -r.rules_passed))
+    failure_labels = [
+        e.explanation or f"rule {e.rule_id}"
+        for e in closest.rule_evals
+        if not e.passed
+    ][:3]
+
+    return LenderResult(
+        lender_id    = lender.id,
+        lender_name  = lender.name,
+        status       = MatchStatus.INELIGIBLE,
+        fit_score    = 0.0,
+        program_id   = closest.program_id,
+        program_name = closest.program_name,
+        rule_evals   = closest.rule_evals,
+        summary      = f"Ineligible: {', '.join(failure_labels)}" if failure_labels else "Ineligible",
     )
-    failure_labels = [rule.label or rule.field for rule, _ in best_attempt.hard_failures[:3]]
-    return {
-        "lender": lender,
-        "status": MatchStatus.INELIGIBLE,
-        "fit_score": 0.0,
-        "best_program": best_attempt.program,
-        "rule_results": best_attempt.rule_results,
-        "summary": f"Ineligible: {', '.join(failure_labels)}",
-    }
 
 
-# ------------------------------------
-# Main entry point — async, runs all lenders concurrently
-# ------------------------------------
+# ─────────────────────────────────────────────────────────────
+# Main entry point
+# ─────────────────────────────────────────────────────────────
 
 async def run_underwriting(application_id: int, db: Session) -> list[MatchResult]:
     """
     Run underwriting for all active lenders concurrently.
-    Uses ThreadPoolExecutor + asyncio.gather for parallelism.
 
-    Adding a new lender requires zero changes here — this function
-    queries ALL active lenders from the DB, so new seed data is
-    automatically picked up on the next run.
+    Thread-safety fix: ORM objects are snapshotted to plain dataclasses
+    BEFORE being handed to ThreadPoolExecutor workers. Workers do zero
+    DB access — all writes happen on the main thread after gather().
     """
+    # ── Load application ─────────────────────────────────────
     application = (
         db.query(Application)
         .options(
@@ -224,7 +334,7 @@ async def run_underwriting(application_id: int, db: Session) -> list[MatchResult
     if not application:
         raise ValueError(f"Application {application_id} not found")
 
-    # All active lenders — scales automatically to N lenders
+    # ── Load all active lenders with rules ───────────────────
     lenders = (
         db.query(Lender)
         .options(joinedload(Lender.programs).joinedload(LenderProgram.rules))
@@ -232,58 +342,59 @@ async def run_underwriting(application_id: int, db: Session) -> list[MatchResult
         .all()
     )
 
-    # Flatten application into context dict once — shared across all lenders
-    context = build_application_context(application)
+    if not lenders:
+        raise ValueError("No active lenders found in database. Run seeder first.")
 
-    # FIX-2: Delete previous results safely.
-    # Must delete child rule_evaluation_results first to avoid FK violation
-    # when re-running underwriting on an application that already has results.
-    existing_matches = (
-        db.query(MatchResult)
-        .filter(MatchResult.application_id == application_id)
-        .all()
-    )
-    for match in existing_matches:
+    # ── Build context + snapshot lenders (before thread hand-off) ──
+    context          = build_application_context(application)
+    lender_snapshots = _snapshot_lenders(lenders)
+
+    # ── FIX-2: Clear previous results (cascade-safe) ─────────
+    existing = db.query(MatchResult).filter(
+        MatchResult.application_id == application_id
+    ).all()
+    for m in existing:
         db.query(RuleEvaluationResult).filter(
-            RuleEvaluationResult.match_result_id == match.id
-        ).delete()
+            RuleEvaluationResult.match_result_id == m.id
+        ).delete(synchronize_session=False)
     db.query(MatchResult).filter(
         MatchResult.application_id == application_id
-    ).delete()
+    ).delete(synchronize_session=False)
     db.commit()
 
-    # Fan out — evaluate all lenders concurrently via thread pool
-    # evaluate_lender() is CPU-bound pure logic, safe to run in threads
+    # ── Fan-out: evaluate all lenders concurrently ───────────
+    # Workers receive only plain Python objects — no DB sessions
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor() as pool:
         tasks = [
-            loop.run_in_executor(pool, evaluate_lender, lender, context)
-            for lender in lenders
+            loop.run_in_executor(pool, evaluate_lender_pure, snap, context)
+            for snap in lender_snapshots
         ]
-        lender_results = await asyncio.gather(*tasks)
+        lender_results: list[LenderResult] = await asyncio.gather(*tasks)
 
-    # Persist results
+    # ── Persist all results on the main thread ───────────────
     saved: list[MatchResult] = []
-    for result in lender_results:
+
+    for lr in lender_results:
         match = MatchResult(
-            application_id=application_id,
-            lender_id=result["lender"].id,
-            program_id=result["best_program"].id if result["best_program"] else None,
-            status=result["status"],
-            fit_score=result["fit_score"],
-            summary=result["summary"],
+            application_id = application_id,
+            lender_id      = lr.lender_id,
+            program_id     = lr.program_id,
+            status         = lr.status,
+            fit_score      = lr.fit_score,
+            summary        = lr.summary,
         )
         db.add(match)
-        db.flush()
+        db.flush()  # get match.id
 
-        for rule, eval_result in result["rule_results"]:
+        for re in lr.rule_evals:
             db.add(RuleEvaluationResult(
-                match_result_id=match.id,
-                rule_id=rule.id,
-                passed=eval_result.passed,
-                actual_value=eval_result.actual_value,
-                required_value=eval_result.required_value,
-                explanation=eval_result.explanation,
+                match_result_id = match.id,
+                rule_id         = re.rule_id,
+                passed          = re.passed,
+                actual_value    = re.actual_value,
+                required_value  = re.required_value,
+                explanation     = re.explanation,
             ))
 
         saved.append(match)
@@ -291,7 +402,8 @@ async def run_underwriting(application_id: int, db: Session) -> list[MatchResult
     application.status = ApplicationStatus.COMPLETED
     db.commit()
 
-    for r in saved:
-        db.refresh(r)
+    # Refresh to load relationships for serialization in the POST response
+    for m in saved:
+        db.refresh(m)
 
     return saved

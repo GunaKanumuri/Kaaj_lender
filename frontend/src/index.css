@@ -1,3 +1,7 @@
+/* ============================================================
+   index.css — global styles + PageTOC layout classes
+   ============================================================ */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,5 +12,55 @@
     font-family: 'Sora', sans-serif;
     -webkit-font-smoothing: antialiased;
     @apply bg-zinc-50 text-zinc-900;
+  }
+}
+
+@layer components {
+
+  /* ── PageLayout shell ──────────────────────────────────── */
+
+  .page-shell {
+    @apply flex justify-center gap-8 w-full;
+    padding: 0 1rem;
+  }
+
+  .page-content {
+    @apply w-full flex-shrink-0;
+  }
+
+  /* Hidden by default — un-nested @media avoids the PostCSS @apply error */
+  .page-toc-rail {
+    @apply hidden;
+  }
+
+  /* ── PageTOC component ─────────────────────────────────── */
+
+  .toc-root        { @apply text-sm; }
+  .toc-heading     { @apply text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3; }
+  .toc-list        { @apply space-y-0.5 list-none m-0 p-0; }
+
+  .toc-item        {
+    @apply flex items-center gap-2 w-full text-left px-2 py-1 rounded-lg
+           text-sm transition-colors cursor-pointer;
+  }
+  .toc-item--indent  { @apply pl-5; }
+  .toc-item--active  { @apply text-emerald-700 font-medium bg-emerald-50; }
+  .toc-item--idle    { @apply text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100; }
+
+  .toc-pip       { @apply flex-shrink-0 w-1 h-1 rounded-full; }
+  .toc-pip--on   { @apply bg-emerald-600; }
+  .toc-pip--off  { @apply bg-transparent; }
+}
+
+/* ── TOC rail — wide screens only ─────────────────────────── */
+/* Must live outside @layer so the @media nesting is valid PostCSS */
+@media (min-width: 1200px) {
+  .page-toc-rail {
+    display: block;
+    flex-shrink: 0;
+    position: sticky;
+    align-self: flex-start;
+    top: calc(56px + 1.5rem);
+    width: 200px;
   }
 }

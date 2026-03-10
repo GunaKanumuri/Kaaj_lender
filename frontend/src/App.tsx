@@ -8,7 +8,8 @@ import { clsx } from 'clsx';
 import DashboardPage from './pages/DashboardPage';
 import ApplicationFormPage from './pages/ApplicationFormPage';
 import ApplicationsListPage from './pages/ApplicationsListPage';
-import ResultsPage from './pages/ResultsPage';
+import ResultsPage             from './pages/ResultsPage';
+import ApplicationDetailPage  from './pages/ApplicationDetailPage';
 import LendersPage from './pages/LendersPage';
 
 const navItems = [
@@ -62,6 +63,7 @@ export default function App() {
             <Route path="/applications" element={<ApplicationsListPage />} />
             <Route path="/applications/new" element={<ApplicationFormPage />} />
             <Route path="/results/:id" element={<ResultsPage />} />
+            <Route path="/applications/:id" element={<ApplicationDetailPage />} />
             <Route path="/lenders" element={<LendersPage />} />
           </Routes>
         </main>

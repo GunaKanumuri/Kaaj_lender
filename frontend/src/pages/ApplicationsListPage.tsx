@@ -85,8 +85,8 @@ export default function ApplicationsListPage() {
           {apps.map(app => (
             <div
               key={app.id}
-              onClick={() => app.status === 'completed' ? navigate(`/results/${app.id}`) : null}
-              className={`bg-white rounded-xl border border-zinc-200 p-4 flex items-center gap-4 transition-shadow ${app.status === 'completed' ? 'hover:shadow-md cursor-pointer' : 'cursor-default'}`}
+              onClick={() => navigate(`/applications/${app.id}`)}
+              className="bg-white rounded-xl border border-zinc-200 p-4 flex items-center gap-4 transition-shadow hover:shadow-md cursor-pointer"
             >
               {/* Icon */}
               <div className="w-10 h-10 bg-zinc-100 rounded-lg flex items-center justify-center flex-shrink-0">
