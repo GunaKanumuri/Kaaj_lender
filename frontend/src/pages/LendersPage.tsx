@@ -422,19 +422,53 @@ function ProgramAccordion({ program }: { program: LenderProgram }) {
 // region 6 ── LenderCard
 // ─────────────────────────────────────────────────────────────
 
-function LenderCard({ lender }: { lender: Lender }) {
-  const [expanded, setExpanded] = useState(false);
-  const active = lender.programs.filter(p => p.is_active).length;
+function LenderCard({
+  lender,
+  onDeleted,
+}: {
+  lender:    Lender;
+  onDeleted: (id: number) => void;
+}) {
+  const [expanded,   setExpanded]   = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [deleting,   setDeleting]   = useState(false);
+
+  const active     = lender.programs.filter(p => p.is_active).length;
   const totalRules = lender.programs.reduce((a, p) => a + p.rules.length, 0);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirming(true);
+  };
+
+  const handleConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleting(true);
+    try {
+      await lendersApi.delete(lender.id);
+      onDeleted(lender.id);
+    } catch {
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
+
+  const handleCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirming(false);
+  };
 
   return (
     <Card padding="none" className="overflow-hidden">
-      <div className="flex items-center gap-4 p-4 cursor-pointer hover:bg-zinc-50 transition-colors"
-        onClick={() => setExpanded(!expanded)}>
+      <div
+        className="flex items-center gap-4 p-4 cursor-pointer hover:bg-zinc-50 transition-colors group"
+        onClick={() => { if (!confirming) setExpanded(!expanded); }}
+      >
         <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
           <Building2 className="w-5 h-5 text-emerald-700" />
         </div>
-        <div className="flex-1">
+
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="font-semibold text-zinc-900">{lender.name}</h3>
             <Badge variant={lender.is_active ? 'success' : 'neutral'}>
@@ -448,8 +482,44 @@ function LenderCard({ lender }: { lender: Lender }) {
             {lender.contact_name && <span>{lender.contact_name}</span>}
           </div>
         </div>
-        {expanded ? <ChevronUp className="w-5 h-5 text-zinc-400" /> : <ChevronDown className="w-5 h-5 text-zinc-400" />}
+
+        {/* Delete controls — shown on hover */}
+        <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+          {confirming ? (
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+              <span className="text-xs font-semibold text-red-700 whitespace-nowrap">Delete lender?</span>
+              <button
+                onClick={handleConfirm}
+                disabled={deleting}
+                className="text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-60 px-2.5 py-1 rounded-md transition-colors"
+              >
+                {deleting ? 'Deleting…' : 'Yes, delete'}
+              </button>
+              <button
+                onClick={handleCancel}
+                className="text-xs text-zinc-500 hover:text-zinc-800 px-1 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleDeleteClick}
+              title="Delete lender"
+              className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-50 text-zinc-400 hover:text-red-500 transition-all"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {!confirming && (
+          expanded
+            ? <ChevronUp   className="w-5 h-5 text-zinc-400 flex-shrink-0" />
+            : <ChevronDown className="w-5 h-5 text-zinc-400 flex-shrink-0" />
+        )}
       </div>
+
       {expanded && (
         <div className="border-t border-zinc-200 p-4 space-y-3 bg-white">
           {lender.contact_email && (
@@ -889,8 +959,11 @@ export default function LendersPage() {
     setLenders(prev => [lender, ...prev]);
     setShowAddModal(false);
     setJustAdded(lender.id);
-    // Clear highlight after 3s
     setTimeout(() => setJustAdded(null), 3000);
+  };
+
+  const handleLenderDeleted = (id: number) => {
+    setLenders(prev => prev.filter(l => l.id !== id));
   };
 
   const totalPrograms = lenders.reduce((a, l) => a + l.programs.length, 0);
@@ -932,7 +1005,10 @@ export default function LendersPage() {
           {lenders.map(lender => (
             <div key={lender.id}
               className={`rounded-2xl transition-shadow duration-300 ${justAdded === lender.id ? 'ring-2 ring-emerald-400 shadow-lg' : ''}`}>
-              <LenderCard lender={lender} />
+              <LenderCard
+                lender={lender}
+                onDeleted={handleLenderDeleted}
+              />
             </div>
           ))}
         </div>

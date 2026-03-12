@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.models.lender import Lender, LenderProgram, PolicyRule
+from app.models.results import MatchResult, RuleEvaluationResult
 from app.schemas.lender import (
     LenderCreate, LenderOut, LenderUpdate,
     LenderProgramCreate, LenderProgramOut, LenderProgramUpdate,
@@ -90,10 +91,38 @@ def update_lender(lender_id: int, payload: LenderUpdate, db: Session = Depends(g
 
 @router.delete("/{lender_id}", status_code=204)
 def delete_lender(lender_id: int, db: Session = Depends(get_db)):
-    """Delete a lender and all its programs and rules (cascades)."""
-    lender = db.query(Lender).filter(Lender.id == lender_id).first()
+    """Delete a lender and all dependent data (programs, rules, match results)."""
+    lender = (
+        db.query(Lender)
+        .options(joinedload(Lender.programs).joinedload(LenderProgram.rules))
+        .filter(Lender.id == lender_id)
+        .first()
+    )
     if not lender:
         raise HTTPException(status_code=404, detail="Lender not found")
+
+    # Collect IDs before any deletes so queries are still valid
+    program_ids = [p.id for p in lender.programs]
+
+    if program_ids:
+        # 1. rule_evaluation_results → references policy_rules.id
+        rule_ids = [
+            r.id for r in
+            db.query(PolicyRule.id)
+            .filter(PolicyRule.program_id.in_(program_ids))
+            .all()
+        ]
+        if rule_ids:
+            db.query(RuleEvaluationResult).filter(
+                RuleEvaluationResult.rule_id.in_(rule_ids)
+            ).delete(synchronize_session=False)
+
+        # 2. match_results → references lender_programs.id
+        db.query(MatchResult).filter(
+            MatchResult.program_id.in_(program_ids)
+        ).delete(synchronize_session=False)
+
+    # 3. ORM cascade handles lender_programs → policy_rules
     db.delete(lender)
     db.commit()
 
@@ -135,10 +164,27 @@ def update_program(program_id: int, payload: LenderProgramUpdate, db: Session = 
 
 @router.delete("/programs/{program_id}", status_code=204)
 def delete_program(program_id: int, db: Session = Depends(get_db)):
-    """Delete a program and all its rules (cascades)."""
-    program = db.query(LenderProgram).filter(LenderProgram.id == program_id).first()
+    """Delete a program and its rules and associated match results."""
+    program = (
+        db.query(LenderProgram)
+        .options(joinedload(LenderProgram.rules))
+        .filter(LenderProgram.id == program_id)
+        .first()
+    )
     if not program:
         raise HTTPException(status_code=404, detail="Program not found")
+
+    # Same cascade pattern — clean up match data before deleting the program
+    rule_ids = [r.id for r in program.rules]
+    if rule_ids:
+        db.query(RuleEvaluationResult).filter(
+            RuleEvaluationResult.rule_id.in_(rule_ids)
+        ).delete(synchronize_session=False)
+
+    db.query(MatchResult).filter(
+        MatchResult.program_id == program_id
+    ).delete(synchronize_session=False)
+
     db.delete(program)
     db.commit()
 
